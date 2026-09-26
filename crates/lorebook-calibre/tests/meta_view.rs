@@ -300,3 +300,36 @@ fn meta_reports_tags_and_formats() {
         "an untagged book has NULL tags, not an empty string"
     );
 }
+
+#[test]
+fn aggregate_columns_split_on_a_comma_with_no_space() {
+    // Calibre's `Concatenate` joins with ',' and no space (backend.py:
+    // `','.join(ctxt)`), and `calibredb list` renders a table with ", " between
+    // values. Those look like different data and are not: diffing our listing
+    // against `calibredb` output is how this gets pinned, because the space is
+    // added by the display layer and must not be split on.
+    let (_dir, conn) = library_with_books("sep", 0);
+    let id = cal::insert_book(&conn, "Two Tags", None, None, None).expect("insert");
+    for t in ["classic", "tolkien"] {
+        let tag = cal::ensure_tag(&conn, t).expect("tag");
+        cal::link_tag(&conn, id, tag).expect("link");
+    }
+    let raw: Option<String> = conn
+        .query_row("SELECT tags FROM meta WHERE id = ?1", [id], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        raw.as_deref(),
+        Some("classic,tolkien"),
+        "the stored aggregate is comma-without-space"
+    );
+
+    // And the split the app performs yields two tags, not one.
+    let page = cal::list_books_page(&conn, 10, 0).unwrap();
+    let book = page.iter().find(|b| b.id == id).expect("book in page");
+    assert_eq!(
+        book.tags,
+        vec!["classic".to_string(), "tolkien".to_string()],
+        "two tags must split into two elements"
+    );
+    assert_eq!(book.tags.len(), 2, "not one tag containing a comma");
+}

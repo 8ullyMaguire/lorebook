@@ -1052,15 +1052,30 @@ pub fn list_books_page(conn: &Connection, limit: i64, offset: i64) -> Result<Vec
 
 /// Split one of `meta`'s aggregated columns into its parts.
 ///
-/// Calibre joins these with `\x1f` (unit separator) and terminates with a
-/// trailing separator, so splitting on it yields a trailing empty element that
-/// is not a value. See the view definition in `calibre_schema.sql`.
+/// The separator is a plain comma, because that is what Calibre's `Concatenate`
+/// uses: `Concatenate(sep=',')` is the default it is constructed with, and
+/// `finalize` does `','.join(ctxt)` (Calibre `src/calibre/db/backend.py`).
+///
+/// Two things follow, and both are load-bearing:
+///
+/// * It is **not** a unit separator or any other control character. An earlier
+///   version here split on `\x1f`, which never matched, so every multi-valued
+///   column came back as a single element — a book with two tags reported one
+///   tag named `"classic,tolkien"`. That is worse than an error: it displays
+///   plausible and is wrong.
+/// * `calibredb list` shows `classic, tolkien`, with a space. The space is
+///   added by Calibre's table formatter, not stored. Splitting on `", "` would
+///   therefore work for tags and silently fail for any value containing a comma.
+///
+/// Empty parts are dropped so a NULL or empty aggregate yields no elements
+/// rather than one empty string.
 fn split_aggregate(value: Option<&str>) -> Vec<String> {
     let Some(v) = value else {
         return Vec::new();
     };
-    v.split('\u{1f}')
+    v.split(',')
+        .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .map(str::to_string)
         .collect()
 }

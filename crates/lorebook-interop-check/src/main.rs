@@ -60,6 +60,10 @@ fn main() -> std::process::ExitCode {
             Some(dir) => verify(Path::new(&dir)),
             None => Err("verify needs a libdir".into()),
         },
+        "list" => match take_first(&mut args) {
+            Some(dir) => list(Path::new(&dir)),
+            None => Err("list needs a libdir".into()),
+        },
         other => Err(format!("unknown command {other}")),
     };
 
@@ -83,6 +87,31 @@ fn insert(dir: &Path, title: &str, author: &str, identifier: &str) -> Result<(),
     cal::link_author(&conn, id, a).map_err(|e| e.to_string())?;
     cal::add_identifier(&conn, id, "isbn", identifier).map_err(|e| e.to_string())?;
     println!("inserted book {id}");
+    Ok(())
+}
+
+/// Print the library the way the UI pages it.
+///
+/// This is the executable form of the M1 completion gate: its output is
+/// diffable against `calibredb list`, so "our listing and Calibre's listing
+/// agree" is a checkable claim rather than something to eyeball. It goes through
+/// the `meta` view, which is also what Calibre's own UI reads.
+fn list(dir: &Path) -> Result<(), String> {
+    let conn = cal::open_library(dir).map_err(|e| e.to_string())?;
+    let total = cal::count_books(&conn).map_err(|e| e.to_string())?;
+    println!("total={total}");
+    for page in 0.. {
+        let books = cal::list_books_page(&conn, 100, page * 100).map_err(|e| e.to_string())?;
+        if books.is_empty() {
+            break;
+        }
+        for b in &books {
+            println!(
+                "{} | {} | authors={:?} tags={:?} series={:?}",
+                b.id, b.title, b.authors, b.tags, b.series
+            );
+        }
+    }
     Ok(())
 }
 
