@@ -28,3 +28,15 @@ pub enum CalibreError {
 }
 
 pub type Result<T> = std::result::Result<T, CalibreError>;
+
+/// `rusqlite::Error` → [`CalibreError::Sql`].
+///
+/// Without this, every `?` on a rusqlite call in this crate needs a
+/// `.map_err(|e| CalibreError::Sql(format!("...: {e}")))`, and the context has to
+/// be retyped at every call site. The message is preserved; only the type is
+/// narrowed.
+impl From<rusqlite::Error> for CalibreError {
+    fn from(e: rusqlite::Error) -> Self {
+        CalibreError::Sql(e.to_string())
+    }
+}

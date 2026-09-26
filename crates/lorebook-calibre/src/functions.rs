@@ -38,13 +38,19 @@
 //! When Calibre changes these, this file is what has to be re-checked. See
 //! `docs/CALIBRE-PROVENANCE.md`.
 
-use rusqlite::functions::FunctionFlags;
+use crate::Result;
+use rusqlite::functions::{Context, FunctionFlags};
+// Aliased deliberately. Importing `Aggregate` unaliased also brings
+// `rusqlite::functions::Result<T, E>` into scope, which shadows this crate's
+// own one-parameter `Result<T> = Result<T, CalibreError>` and breaks every
+// other signature in the file.
+use rusqlite::functions::Aggregate as RusqliteAggregate;
 use rusqlite::Connection;
 
 /// Register every Calibre SQL function on a connection.
 ///
 /// Call this **before** any write. Reads work without it; writes do not.
-pub fn register(conn: &Connection) -> rusqlite::Result<()> {
+pub fn register(conn: &Connection) -> Result<()> {
     // Every one of these is pure and cheap, so no INNOCUOUS/DIRECTONLY flags:
     // SQLITE_DIRECTONLY would refuse to run them *inside a trigger*, and
     // Calibre's books_insert_trg is exactly a trigger calling title_sort().
@@ -58,17 +64,116 @@ pub fn register(conn: &Connection) -> rusqlite::Result<()> {
     conn.create_scalar_function("author_sort", 1, f, |ctx| {
         Ok(author_sort(ctx.get::<String>(0)?.as_str()))
     })?;
-    // Calibre calls sortconcat(id, name); the id only matters for its NULL-ness
-    // and this app never uses Calibre's own tag-browser ordering.
-    conn.create_scalar_function("sortconcat", 2, f, |ctx| {
-        let _id = ctx.get::<Option<i64>>(0)?;
-        Ok(ctx.get::<Option<String>>(1)?.unwrap_or_default())
-    })?;
     // Calibre's meta view calls this per row and drops books where it is 0.
     conn.create_scalar_function("books_list_filter", 1, f, |ctx| {
         Ok(ctx.get::<Option<i64>>(0)?.map(|_| 1i64).unwrap_or(0))
     })?;
+
+    // `sortconcat` and `concat` are AGGREGATE functions in Calibre, not scalar
+    // ones. The `meta` view reads:
+    //
+    //   (SELECT sortconcat(bal.id, name) FROM books_authors_link ...) authors
+    //   (SELECT concat(name)         FROM tags ...)               tags
+    //   (SELECT concat(format)      FROM data ...)               formats
+    //
+    // Registering these as scalar functions "works" in the sense that SQLite
+    // accepts the call, and is wrong in a way that is silent: a scalar sees one
+    // row at a time, so a book with three authors yields one name, and a book
+    // with no tags yields NULL rather than a joined string. The list screen then
+    // shows most books with no author, which reads as a data problem rather than
+    // a registration one. `concat` was not registered at all, so `meta.tags`
+    // and `meta.formats` could not be read at all.
+    //
+    // Semantics transcribed from `Concatenate` / `SortedConcatenate` in
+    // Calibre's `src/calibre/db/backend.py`:
+    //
+    //   * `concat(value)`            NULL values skipped; values joined with ',';
+    //                                NULL when nothing was accumulated.
+    //   * `sortconcat(index, value)` values stored at `index`, emitted in
+    //                                ascending index order, joined with ','.
+    //                                This is what gives the authors column
+    //                                Calibre's author ordering instead of
+    //                                link-table order.
+    conn.create_aggregate_function("concat", 1, f, CommaConcat::new(false))?;
+    conn.create_aggregate_function("sortconcat", 2, f, CommaConcat::new(true))?;
     Ok(())
+}
+
+/// Calibre's comma-joining string aggregate, in both its forms.
+///
+/// One type covers `concat` and `sortconcat` because they differ only in
+/// whether the value carries an index, and keeping them together keeps the
+/// shared semantics — comma separator, NULL when empty — in one place where
+/// they cannot drift apart.
+#[derive(Clone, Copy)]
+struct CommaConcat {
+    ordered: bool,
+}
+
+impl CommaConcat {
+    fn new(ordered: bool) -> Self {
+        Self { ordered }
+    }
+}
+
+/// Accumulated values for one aggregate group.
+enum ConcatAcc {
+    /// Appended in encounter order (`concat`).
+    Plain(Vec<String>),
+    /// Keyed by index, emitted in ascending key order (`sortconcat`).
+    Indexed(std::collections::BTreeMap<i64, String>),
+}
+
+impl RusqliteAggregate<ConcatAcc, Option<String>> for CommaConcat {
+    fn init(&self, _ctx: &mut Context<'_>) -> rusqlite::Result<ConcatAcc> {
+        Ok(if self.ordered {
+            ConcatAcc::Indexed(Default::default())
+        } else {
+            ConcatAcc::Plain(Vec::new())
+        })
+    }
+
+    fn step(&self, ctx: &mut Context<'_>, acc: &mut ConcatAcc) -> rusqlite::Result<()> {
+        // Calibre skips NULL rather than stringifying it: `if value is not None`.
+        match acc {
+            ConcatAcc::Plain(v) => {
+                if let Some(value) = ctx.get::<Option<String>>(0)? {
+                    v.push(value);
+                }
+            }
+            ConcatAcc::Indexed(m) => {
+                let index = ctx.get::<Option<i64>>(0)?;
+                let value = ctx.get::<Option<String>>(1)?;
+                if let (Some(i), Some(val)) = (index, value) {
+                    // A later value for the same index replaces the earlier one,
+                    // matching Calibre's `ctxt[ndx] = value`.
+                    m.insert(i, val);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finalize(
+        &self,
+        _ctx: &mut Context<'_>,
+        acc: Option<ConcatAcc>,
+    ) -> rusqlite::Result<Option<String>> {
+        // Calibre returns NULL, not "", for an empty group. The difference is
+        // visible: `meta.tags` being NULL vs '' changes whether the UI treats a
+        // book as untagged.
+        let Some(acc) = acc else {
+            return Ok(None);
+        };
+        let parts: Vec<String> = match acc {
+            ConcatAcc::Plain(v) => v,
+            ConcatAcc::Indexed(m) => m.into_values().collect(),
+        };
+        if parts.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(parts.join(",")))
+    }
 }
 
 // ---------------------------------------------------------------------------

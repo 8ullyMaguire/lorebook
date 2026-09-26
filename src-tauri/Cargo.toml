@@ -1,0 +1,37 @@
+[package]
+name = "lorebook"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://github.com/hirrolot19/lorebook"
+description = "A local-first ebook library that reads and writes Calibre libraries directly"
+
+[lib]
+# Tauri v2 builds the app as a library so the mobile entry points can share it.
+# The desktop binary below is a thin wrapper over `run()`.
+name = "lorebook_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "lorebook"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rusqlite = { workspace = true }
+
+lorebook-core = { path = "../crates/lorebook-core" }
+lorebook-calibre = { path = "../crates/lorebook-calibre" }
+
+[features]
+# Enabled by `tauri build`; wires the custom protocol for the bundled frontend.
+custom-protocol = ["tauri/custom-protocol"]

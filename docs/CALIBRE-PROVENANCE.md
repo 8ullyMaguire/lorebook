@@ -36,6 +36,8 @@ Calibre's English list is exactly `A`, `The`, `An`.
 | What | Where in Calibre |
 |---|---|
 | `title_sort` | `src/calibre/ebooks/metadata/__init__.py` |
+| `sortconcat` (aggregate, 2 args) | `src/calibre/db/backend.py` → `SortedConcatenate` |
+| `concat` (aggregate, 1 arg) | same file → `Concatenate` |
 | `author_to_author_sort` | same file |
 | `get_title_sort_pat` | same file |
 | `quote_pairs` | same file |
@@ -113,6 +115,48 @@ point:
   and all 11 views.
 
 Regenerate it after any Calibre upgrade with `tools/extract_schema.py`.
+
+## `concat` and `sortconcat` are aggregates, not scalars
+
+The `meta` view reads:
+
+```sql
+(SELECT sortconcat(bal.id, name) FROM books_authors_link ...) authors
+(SELECT concat(name)         FROM tags ...)               tags
+(SELECT concat(format)      FROM data ...)               formats
+```
+
+Both are **aggregate** functions in Calibre, registered with
+`createaggregatefunction`. An earlier version of this crate registered
+`sortconcat` as a *scalar* and did not register `concat` at all.
+
+SQLite accepts both registrations without complaint, which is what makes this a
+silent bug rather than a loud one. A scalar function sees one row at a time, so
+a book with three authors reports one name, and a book with no tags reports NULL
+per row rather than NULL for the group. The list screen then shows most books
+with no author — indistinguishable from a data problem, and unaffected by any
+test that does not specifically count authors.
+
+Both are now implemented as `Aggregate` in `src/functions.rs`, transcribed from
+Calibre's `Concatenate` / `SortedConcatenate`:
+
+- comma separator, matching `Concatenate(sep=',')`, the default Calibre
+  constructs them with;
+- NULL inputs skipped, not stringified (`if value is not None`);
+- **NULL, not `""`, for an empty group** — the difference decides whether the UI
+  treats a book as untagged;
+- `sortconcat` stores values by index and emits them in ascending index order,
+  which is what gives `meta.authors` Calibre's author ordering rather than
+  link-table order.
+
+`tests/meta_view.rs` asserts the behaviour directly (comma joining, index
+ordering, NULL-when-empty, NULL-skipping) and end-to-end through `meta`: a
+three-author book must report three names. That last assertion is the one that
+would have caught it.
+
+**Do not "simplify" these into scalar functions.** rusqlite's `Aggregate` trait
+is the only way to get a `finalize` step, and without `finalize` there is no
+joined string to return.
 
 ## What is deliberately not implemented
 

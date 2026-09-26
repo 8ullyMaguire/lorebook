@@ -28,9 +28,9 @@ Verified by inspection on 2026-09-26. These are facts about the tree, not
 intentions.
 
 - Commit `8221370`, tag `v0.1.0-calibre-interop`. Working tree clean.
-- **50 tests pass** (`cargo test`): 18 unit in `lorebook-calibre`, 27 integration
-  in `tests/interop.rs`, 3 differential in `tests/matches_calibre`, 2 in
-  `tests/meta_view.rs`.
+- **59 tests pass** (`cargo test`): 18 unit in `lorebook-calibre`, 27 integration
+  in `tests/interop.rs`, 3 differential in `tests/matches_calibre`, 11 in
+  `tests/meta_view.rs` (the `meta` view and paging).
 - **11 interop checks pass** against a real Calibre 9.15 binary
   (`bash crates/lorebook-calibre/tests/interop_with_calibre.sh`).
 - `cargo clippy --all-targets` is warning-free.
@@ -71,7 +71,14 @@ re-verification instructions in `docs/CALIBRE-PROVENANCE.md`.
 
 **Goal:** a running desktop app that opens a Calibre library and lists its books.
 
-M1's backend half is done. What remains is the app shell and the UI.
+**Progress.** M1.1 (Tauri scaffold) and M1.2 (`Library` newtype, pagination,
+commands) are done and compiling. M1.3 (SvelteKit UI) and M1.4 (the completion
+gate) remain.
+
+One thing M1.2 corrected in the code, not just the plan: `sortconcat` and
+`concat` are Calibre **aggregate** functions. They had been registered as
+scalars, which SQLite accepts and which silently reports one author for a
+three-author book. See `docs/CALIBRE-PROVENANCE.md`.
 
 ### M1.1 — Tauri scaffold
 
@@ -194,7 +201,7 @@ Three Tauri commands, each thin, over a `Mutex<Option<Library>>`:
 - `create_library(path: String) -> Result<i64, String>`
 - `list_books_page(limit: i64, offset: i64) -> Result<Vec<Book>, String>`
 
-**Verify:** `cargo test -p lorebook-calibre` still passes 50 tests.
+**Verify:** `cargo test -p lorebook-calibre` still passes 59 tests.
 
 ### M1.3 — SvelteKit UI: library chooser and book list
 
@@ -223,7 +230,7 @@ M1 is done when all of these are true. Run them; do not assume.
 # 1. Still green after all the new code
 cd /home/alvaro/code-local/rust/lorebook
 CARGO_TARGET_DIR=/home/alvaro/.cargo-target/lorebook cargo test
-#   expect: 50 passed; 0 failed  (more is fine)
+#   expect: 59 passed; 0 failed  (more is fine)
 
 # 2. Calibre interop unbroken
 CARGO_TARGET_DIR=/home/alvaro/.cargo-target/lorebook \

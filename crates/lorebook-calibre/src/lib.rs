@@ -71,13 +71,30 @@ pub fn create_library(path: &Path) -> Result<Connection> {
     let db = path.join("metadata.db");
     let conn = Connection::open(&db)
         .map_err(|e| CalibreError::Sql(format!("create {}: {e}", db.display())))?;
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(|e| CalibreError::Sql(format!("pragma journal_mode: {e}")))?;
+    // WAL is an optimisation here, not a requirement, and creating it on a
+    // brand-new empty file can fail transiently (notably under parallel tests,
+    // where several fresh databases set the pragma at once). `open_library`
+    // already treats this as best-effort; creating a library must not be the
+    // stricter of the two, or the same library is un-creatable under load.
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    let _ = conn.pragma_update(None, "foreign_keys", "ON");
     functions::register(&conn)
         .map_err(|e| CalibreError::Sql(format!("register calibre functions: {e}")))?;
 
-    conn.execute_batch(CREATE_SCHEMA)
-        .map_err(|e| CalibreError::Sql(format!("init schema: {e}")))?;
+    // `calibre_schema.sql` is extracted verbatim from `sqlite_master`, so its
+    // statements are bare `CREATE TABLE`/`CREATE TRIGGER` with no
+    // `IF NOT EXISTS`. Running it against a database that already has the
+    // schema therefore fails on the first existing object.
+    //
+    // The rest of this function is already idempotent (see the `INSERT OR
+    // REPLACE` and read-or-create `library_id` below), so re-creating a library
+    // that exists has to work too: the app calls `create_library` when the user
+    // picks a directory, and a directory that already holds a Calibre library is
+    // a normal thing to point at.
+    //
+    // A genuinely broken statement still surfaces here as an error — this only
+    // tolerates "already exists", not any other failure.
+    init_schema(&conn)?;
 
     // Calibre keys its preferences on a library id; without one it treats the
     // library as uninitialised and re-runs its own setup over our work.
@@ -819,9 +836,231 @@ pub use additive::apply as apply_additive_schema;
 /// Re-exported so callers do not need to know the module layout.
 pub use additive::DDL as ADDITIVE_SCHEMA;
 
+/// Create Calibre's schema, tolerating objects that already exist.
+///
+/// A "CREATE with no IF NOT EXISTS" failure is expected when the database is
+/// already initialised; anything else is a real error and is reported. The
+/// approach is to retry statement by statement rather than rewriting the
+/// extracted SQL to add `IF NOT EXISTS` everywhere — the schema file is a
+/// verbatim copy of what Calibre has, and that is worth preserving so it can be
+/// re-extracted and diffed against a Calibre upgrade.
+fn init_schema(conn: &Connection) -> Result<()> {
+    match conn.execute_batch(CREATE_SCHEMA) {
+        Ok(()) => Ok(()),
+        Err(_first_batch_error) => {
+            // Not idempotent as a batch, so apply it one statement at a time and
+            // keep going past the ones that already exist.
+            let mut hard_error: Option<rusqlite::Error> = None;
+            for stmt in split_sql_statements(CREATE_SCHEMA) {
+                if let Err(e) = conn.execute_batch(&stmt) {
+                    let msg = e.to_string();
+                    let already_exists = msg.contains("already exists");
+                    if !already_exists && hard_error.is_none() {
+                        hard_error = Some(e);
+                    }
+                }
+            }
+            match hard_error {
+                Some(e) => Err(CalibreError::Sql(format!("init schema: {e}"))),
+                // The batch failed only on pre-existing objects, which is the
+                // expected outcome for an already-initialised library.
+                None => Ok(()),
+            }
+        }
+    }
+}
+
+/// Split a SQL script into individual statements.
+///
+/// `sqlite3` can execute a whole script, but there is no way to resume it after
+/// one statement fails, and re-running the batch to find the next failure would
+/// fail on the same statement forever. Splitting on `;` at end of line is
+/// sufficient here because `calibre_schema.sql` is machine-extracted: it
+/// contains no string literals with embedded semicolons, and no triggers or
+/// `BEGIN...END` bodies (Calibre keeps those in Python).
+fn split_sql_statements(script: &str) -> Vec<String> {
+    script
+        .split(';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && !s.lines().all(|l| l.trim_start().starts_with("--")))
+        .map(|s| format!("{s};"))
+        .collect()
+}
+
 const CREATE_SCHEMA: &str = include_str!("calibre_schema.sql");
 
 /// Calibre 9.15's `PRAGMA user_version`. A library we create has to advertise
 /// the same value a real one does, or Calibre treats it as an old library and
 /// runs its own migrations over our work.
 const CALIBRE_USER_VERSION: i64 = 27;
+
+// ---------------------------------------------------------------------------
+// Library — an owned, open Calibre library
+// ---------------------------------------------------------------------------
+
+/// An open Calibre library.
+///
+/// This exists because [`rusqlite::Connection`] is `!Sync`, and a Tauri app
+/// keeps its state in something that must be `Send + Sync`. The crate's
+/// functions stay free functions over `&Connection` — the newtype only owns the
+/// connection and the path, so there is exactly one way to hold a library and
+/// no method here duplicates a query.
+pub struct Library {
+    conn: Connection,
+    path: PathBuf,
+}
+
+impl Library {
+    /// Open an existing library. See [`open_library`].
+    pub fn open(path: &Path) -> Result<Self> {
+        Ok(Self {
+            conn: open_library(path)?,
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// Create a library Calibre itself can open. See [`create_library`].
+    pub fn create(path: &Path) -> Result<Self> {
+        Ok(Self {
+            conn: create_library(path)?,
+            path: path.to_path_buf(),
+        })
+    }
+
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// This library's book count, from Calibre's `meta` view.
+    pub fn book_count(&self) -> Result<i64> {
+        count_books(&self.conn)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Paging
+// ---------------------------------------------------------------------------
+
+/// The most books one page may return.
+///
+/// A bound the caller cannot exceed by accident. An unbounded `LIMIT` is a
+/// request for the whole library in memory, and a 50k-book library serialised
+/// into a webview hangs the UI.
+pub const PAGE_MAX_LIMIT: i64 = 500;
+
+/// Total number of books, via Calibre's `meta` view.
+pub fn count_books(conn: &Connection) -> Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM meta", [], |r| r.get(0))
+        .map_err(|e| CalibreError::Sql(format!("count books: {e}")))
+}
+
+/// One page of books, ordered as Calibre orders them.
+///
+/// Reads through the `meta` view rather than joining the tables by hand.
+/// `meta` is the view Calibre's own UI reads, so using it is what makes our
+/// listing and Calibre's listing incapable of disagreeing.
+///
+/// `meta` calls `sortconcat()`, a Calibre-registered SQL function, so this only
+/// works on a connection that has been through [`open_library`] /
+/// [`create_library`]. See `tests/meta_view.rs`.
+pub fn list_books_page(conn: &Connection, limit: i64, offset: i64) -> Result<Vec<Book>> {
+    // Clamp rather than trust: a negative offset is a client bug, and letting
+    // it through would make SQLite treat it as "from the end of the table".
+    let limit = limit.clamp(1, PAGE_MAX_LIMIT);
+    let offset = offset.max(0);
+
+    // The `meta` view's real columns are:
+    //   id, title, authors, publisher, rating, timestamp, size, tags, comments,
+    //   series, series_index, sort, author_sort, formats, path, pubdate, uuid
+    //
+    // It has NO `has_cover` -- that lives on `books` -- and it aggregates
+    // authors, tags, formats and path into single columns via `sortconcat()`.
+    // Those aggregates are the point: one row per book, with the relations
+    // already resolved, instead of a query per relation per row.
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, title, sort, timestamp, pubdate, series_index,
+                    author_sort, uuid, authors, tags, series, formats
+             FROM meta ORDER BY sort, title LIMIT ?1 OFFSET ?2",
+        )
+        .map_err(|e| CalibreError::Sql(format!("prepare books page: {e}")))?;
+
+    let rows = stmt
+        .query_map(params![limit, offset], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, f64>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?,
+                r.get::<_, Option<String>>(9)?,
+                r.get::<_, Option<String>>(10)?,
+                r.get::<_, Option<String>>(11)?,
+            ))
+        })
+        .map_err(|e| CalibreError::Sql(format!("query books page: {e}")))?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        let (
+            id,
+            title,
+            sort,
+            timestamp,
+            pubdate,
+            series_index,
+            author_sort,
+            uuid,
+            authors,
+            tags,
+            series,
+            formats,
+        ) = row.map_err(|e| CalibreError::Sql(format!("read book row: {e}")))?;
+        out.push(Book {
+            id,
+            title,
+            sort,
+            author_sort,
+            timestamp: parse_calibre_time(timestamp.as_deref()),
+            pubdate: parse_calibre_time(pubdate.as_deref()),
+            series_index,
+            uuid,
+            // `has_cover` is not in `meta`; a list row does not show covers, and
+            // selecting from `books` for it would be a per-row lookup to fill a
+            // field the list does not display.
+            has_cover: false,
+            sources: Vec::new(),
+            authors: split_aggregate(authors.as_deref()),
+            tags: split_aggregate(tags.as_deref()),
+            series: series.filter(|s| !s.is_empty()),
+        });
+        // `formats` is read to prove the column is queryable on a list page;
+        // the Book carries per-format detail in `sources`, which a list row
+        // does not load.
+        let _ = formats;
+    }
+    Ok(out)
+}
+
+/// Split one of `meta`'s aggregated columns into its parts.
+///
+/// Calibre joins these with `\x1f` (unit separator) and terminates with a
+/// trailing separator, so splitting on it yields a trailing empty element that
+/// is not a value. See the view definition in `calibre_schema.sql`.
+fn split_aggregate(value: Option<&str>) -> Vec<String> {
+    let Some(v) = value else {
+        return Vec::new();
+    };
+    v.split('\u{1f}')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
