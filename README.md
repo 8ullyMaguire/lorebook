@@ -4,9 +4,16 @@ A local-first ebook library manager. Reads and writes **Calibre libraries
 directly** — the same `metadata.db` your existing library uses — so there is no
 import step and no second copy of your books.
 
-Rust core, Tauri desktop shell, SvelteKit UI. See `docs/SPECIFICATION.md` for
-the full product spec and `docs/CALIBRE-PROVENANCE.md` for how the Calibre
-compatibility is verified.
+Rust core, Tauri desktop shell, SvelteKit UI.
+
+| Document | What it is |
+|---|---|
+| `docs/SPECIFICATION.md` | The product spec - what it is and why |
+| `docs/PLAN.md` | The implementation plan - sequence, exact files, per-step verification |
+| `docs/CALIBRE-PROVENANCE.md` | How Calibre compatibility is verified, and how to re-verify after an upgrade |
+
+Start with `docs/PLAN.md` to implement; it references the spec for design
+reasoning rather than restating it.
 
 ## Status
 
