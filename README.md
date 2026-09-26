@@ -1,0 +1,97 @@
+# Lorebook
+
+A local-first ebook library manager. Reads and writes **Calibre libraries
+directly** — the same `metadata.db` your existing library uses — so there is no
+import step and no second copy of your books.
+
+Rust core, Tauri desktop shell, SvelteKit UI. See `docs/SPECIFICATION.md` for
+the full product spec and `docs/CALIBRE-PROVENANCE.md` for how the Calibre
+compatibility is verified.
+
+## Status
+
+**M1 — Calibre interop core.** Complete and verified.
+
+Done:
+- Open an existing Calibre library; create a new one Calibre can open.
+- Read and write Calibre's own tables (`books`, `authors`, `tags`, `series`,
+  `data`, `identifiers`, link tables) **unmodified**.
+- Register the SQL functions Calibre's triggers call, so Calibre's own triggers
+  compute `sort`, `uuid` and page counts exactly as they would under Calibre.
+- Additive, namespaced tables for Lorebook's own data (`book_sources`,
+  `scan_roots`, `reading_state`, …), applied idempotently and invisible to
+  Calibre.
+- Reimplementation of `title_sort` and `author_sort` transcribed from Calibre
+  9.15 source, byte-exact against Calibre's own Python across 103 cases.
+
+Not started: the Tauri app shell, the SvelteKit UI, scanning, metadata editing,
+and reading-position tracking. `book_sources` and the additive schema are in
+place for them.
+
+## The interop problem, in one paragraph
+
+Calibre registers `title_sort()` and `uuid4()` as Python functions on its SQLite
+connection, and its `books_insert_trg` trigger calls both. Those functions only
+exist while Calibre has the database open, so any other SQLite client fails on
+the first insert with `no such function: title_sort`. This crate implements
+them in Rust and registers them, so Calibre's triggers keep working untouched.
+That is the whole design: **we supply the functions Calibre's triggers call,
+rather than replacing or disabling the triggers.**
+
+## Layout
+
+```
+crates/lorebook-core       domain types (Book, BookSource, SourceKind, …)
+crates/lorebook-calibre    Calibre metadata.db interop
+  src/functions.rs         Calibre's SQL functions, transcribed from its source
+  src/calibre_schema.sql   generated from a real library — do not hand-edit
+  src/additive.sql         Lorebook's own tables
+  tests/interop.rs         27 tests against a real Calibre database
+  tests/matches_calibre.rs differential test vs Calibre's own Python
+  tests/interop_with_calibre.sh   11 end-to-end checks against a real binary
+crates/lorebook-interop-check  helper binary used by the shell test
+tools/                     extract_schema.py, gen_calibre_expected.py
+fixtures/                  a real Calibre 9.15 metadata.db, used by the tests
+```
+
+## Building and testing
+
+```sh
+cargo build
+cargo test          # 48 tests, no external dependencies needed
+```
+
+The end-to-end interop test needs `calibre` on `PATH` and exits 77 (skip)
+without it:
+
+```sh
+bash crates/lorebook-calibre/tests/interop_with_calibre.sh
+```
+
+Regenerating the Calibre-derived files after a Calibre upgrade:
+
+```sh
+git clone --depth 1 --filter=blob:none --sparse \
+  https://github.com/kovidgoyal/calibre /tmp/calibre
+cd /tmp/calibre && git sparse-checkout set src/calibre/ebooks src/calibre/utils
+cd -
+python3 tools/extract_schema.py                       # needs `calibre` binary
+CALIBRE_SRC=/tmp/calibre python3 tools/gen_calibre_expected.py
+cargo test -p lorebook-calibre
+```
+
+## Testing philosophy
+
+Interop claims are only worth as much as the evidence behind them, so there are
+three independent layers, and a change to any Calibre-facing behaviour has to
+pass all three:
+
+1. **Unit tests** pin the behaviour that matters and the cases that are easy to
+   get wrong.
+2. **A differential test against Calibre's own Python.** The first version of
+   `title_sort` here was written from observed behaviour and used an article
+   list that was wrong in 10 of 13 entries; Calibre's English list is `A`,
+   `The`, `An`. Reading Calibre's source is what caught it, and the differential
+   test is what keeps it caught.
+3. **End-to-end against a real `calibre` binary**, in both directions: a library
+   we create that Calibre reads, and a library Calibre creates that we read.

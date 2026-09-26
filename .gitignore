@@ -1,0 +1,20 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Tauri / SvelteKit (not yet scaffolded, but ignore early)
+/src-tauri/target
+/ui/node_modules
+/ui/.svelte-kit
+/ui/build
+/ui/dist
+
+# Local Calibre libraries. `lib/` is what the interop test creates when run from
+# the repo root; a real user library must never be committed.
+/lib/
+*.db-wal
+*.db-shm
+
+# The one committed database is the test fixture, deliberately.
+!fixtures/
+!fixtures/*.db

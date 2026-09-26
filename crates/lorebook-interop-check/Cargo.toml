@@ -1,0 +1,13 @@
+[package]
+name = "lorebook-interop-check"
+description = "Drives a Calibre library through lorebook-calibre, for the interop shell test"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+lorebook-calibre = { path = "../lorebook-calibre" }
+rusqlite.workspace = true
