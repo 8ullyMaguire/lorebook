@@ -18,7 +18,9 @@ reasoning rather than restating it.
 ## Status
 
 **M1 — Calibre interop core and app shell.** Built and verified at the library
-level. Not yet verified by hand in a running window.
+level. The app launches and its window maps, but the window does not paint in
+this environment, so the final hop — webview loads the UI, IPC round trip — is
+unverified. See `docs/PLAN.md` M1.4 for exactly what was and was not checked.
 
 Done:
 - Open an existing Calibre library; create a new one Calibre can open.
@@ -41,8 +43,9 @@ Verified:
 - 60 cargo tests, `svelte-check` clean, clippy clean.
 - 11 end-to-end checks against a real `calibre` binary, in both directions.
 
-Not done: M1's window-level check (opening a library in the running app by
-hand), and everything from M2 on — scanning, curation, search, templates,
+Not done: M1's window-level check — the app starts and the window maps, but
+WebKitGTK does not paint under this Hyprland session, so the UI itself is
+unverified. Then everything from M2 on: scanning, curation, search, templates,
 plugins. `book_sources` and the additive schema are in place for them.
 
 ## The interop problem, in one paragraph

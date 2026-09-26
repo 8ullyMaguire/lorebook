@@ -250,6 +250,30 @@ cd ui && pnpm build
 **Do not tag M1 complete until check 4 has been done by hand.** A passing test
 suite does not prove the app opens a library.
 
+**Status of check 4, 2026-09-26 — partially done, and the remainder is blocked
+on the environment, not on the code.**
+
+What was verified: the release binary launches, `main` runs, and the process
+stays alive with live `WebKitWebProcess` and `WebKitNetworkProcess` children.
+`hyprctl` reports the window as `class: Lorebook`, `mapped: true`,
+`visible: true`, `acceptsInput: true`. So the app starts, GTK initialises, and
+the webview spawns.
+
+What could not be verified: the window never paints. Screenshots of the
+compositor show the desktop behind it, under both the X11 and the Wayland
+backend, and `grim` captures of the reported window geometry contain other
+applications' pixels. The window is created and mapped but its surface stays
+blank.
+
+That is a WebKitGTK-rendering-under-Hyprland symptom, not evidence about this
+app: the frontend builds, `svelte-check` is clean, and the same library opens and
+lists correctly through the core API. What is genuinely unproven is the last hop
+— that the webview loads `index.html` and the IPC round trip works — because that
+requires a painted window to observe.
+
+**To close this: run the app on a session where WebKitGTK paints, and confirm a
+library opens and lists.** Until then M1 is not tagged complete.
+
 Commit: `feat(m1): Tauri shell, library open/create, book list view`
 Tag: `v0.1.0-m1-core` (move the existing `v0.1.0-calibre-interop` — it marks the
 backend half, which is a useful historical marker; do not delete it).
