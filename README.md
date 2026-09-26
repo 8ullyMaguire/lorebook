@@ -17,7 +17,8 @@ reasoning rather than restating it.
 
 ## Status
 
-**M1 — Calibre interop core.** Complete and verified.
+**M1 — Calibre interop core and app shell.** Built and verified at the library
+level. Not yet verified by hand in a running window.
 
 Done:
 - Open an existing Calibre library; create a new one Calibre can open.
@@ -25,15 +26,24 @@ Done:
   `data`, `identifiers`, link tables) **unmodified**.
 - Register the SQL functions Calibre's triggers call, so Calibre's own triggers
   compute `sort`, `uuid` and page counts exactly as they would under Calibre.
+- Reimplementation of `title_sort`, `author_sort`, `concat` and `sortconcat`
+  transcribed from Calibre 9.15 source, byte-exact against Calibre's own Python
+  across 103 cases.
 - Additive, namespaced tables for Lorebook's own data (`book_sources`,
   `scan_roots`, `reading_state`, …), applied idempotently and invisible to
   Calibre.
-- Reimplementation of `title_sort` and `author_sort` transcribed from Calibre
-  9.15 source, byte-exact against Calibre's own Python across 103 cases.
+- Tauri v2 shell and SvelteKit UI: open or create a library, page through its
+  books, see one book's detail. Svelte 5, static adapter, IPC over `invoke`.
 
-Not started: the Tauri app shell, the SvelteKit UI, scanning, metadata editing,
-and reading-position tracking. `book_sources` and the additive schema are in
-place for them.
+Verified:
+- Our listing of a Calibre-created library is identical to `calibredb list` —
+  same books, authors, tags, series, and the same article-stripped ordering.
+- 60 cargo tests, `svelte-check` clean, clippy clean.
+- 11 end-to-end checks against a real `calibre` binary, in both directions.
+
+Not done: M1's window-level check (opening a library in the running app by
+hand), and everything from M2 on — scanning, curation, search, templates,
+plugins. `book_sources` and the additive schema are in place for them.
 
 ## The interop problem, in one paragraph
 
