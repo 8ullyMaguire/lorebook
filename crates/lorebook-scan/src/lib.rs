@@ -31,7 +31,6 @@ use std::time::UNIX_EPOCH;
 
 use lorebook_core::hash::ContentHasher;
 use lorebook_core::{SourceKind, SourceState};
-pub mod filename;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
