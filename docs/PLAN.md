@@ -341,6 +341,54 @@ Enforce it in the type system, not in review: the scan API returns
 
 **Verify:** a test asserting no code path from `scan` produces `kind='managed'`.
 
+### M2.4 — M2 completion gate
+
+M2 is done when all of these are true. Run them; do not assume.
+
+```sh
+cd /home/alvaro/code-local/rust/lorebook
+export CARGO_TARGET_DIR=/home/alvaro/.cargo-target/lorebook
+
+# 1. The whole workspace is green
+cargo test --workspace
+#   expect: 85 passed; 0 failed
+
+# 2. Extending the library has not broken Calibre reading it.
+#    This is the check that matters most: M2 writes to book_sources and to
+#    books/data, and a mistake there shows up as Calibre refusing the file,
+#    not as a failing Rust test.
+bash crates/lorebook-calibre/tests/interop_with_calibre.sh
+#   expect: interop: 11 passed, 0 failed
+
+# 3. No lint debt
+cargo clippy --workspace --all-targets
+#   expect: no output
+
+# 4. The app still builds
+cargo build --release
+#   expect: Finished `release` profile
+```
+
+**Status, 2026-09-28: all four pass.** 85 tests (60 at M1, plus 8 for the
+hasher and 17 for the scanner), interop 11/11, clippy clean, release builds.
+
+**Not required for M2, and not done:** the scan is not exposed over IPC to the
+UI yet, so there is no way to point the app at a folder from the interface. That
+is a UI milestone, not a storage one. A scanned book's title is its filename stem
+until M3 parses real metadata — deliberately, because inventing metadata during
+a scan is how a library ends up with plausible wrong titles.
+
+**One bug M2's own tests found, recorded because it is the kind that ships.** The
+new-book path originally hardcoded `kind='reference'`, so a symlink that was the
+first sighting of its content was recorded as a file the app believed it owned —
+and `SourceKind::owns_file` is exactly the predicate that authorises deleting it.
+A scan could therefore mark a user's own file as ours to delete. Both paths now
+derive the kind from the `SourceKind` enum rather than a string literal, and a
+test links to content *outside* the scan root so it actually reaches that code.
+
+Commit: `M2.1` then `M2.2 + M2.3`
+Tag: `v0.2.0-m2-storage-model`
+
 ---
 
 ## M3 — Curation pipeline (spec §3.6)

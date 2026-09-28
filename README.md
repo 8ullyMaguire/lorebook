@@ -17,6 +17,9 @@ reasoning rather than restating it.
 
 ## Status
 
+**M2 — Storage model.** Built and verified. See below; M1 is still open on one
+environment-blocked check.
+
 **M1 — Calibre interop core and app shell.** Built and verified at the library
 level. The app launches and its window maps, but the window does not paint in
 this environment, so the final hop — webview loads the UI, IPC round trip — is
@@ -40,8 +43,40 @@ Done:
 Verified:
 - Our listing of a Calibre-created library is identical to `calibredb list` —
   same books, authors, tags, series, and the same article-stripped ordering.
-- 60 cargo tests, `svelte-check` clean, clippy clean.
+- 85 cargo tests, `svelte-check` clean, clippy clean.
 - 11 end-to-end checks against a real `calibre` binary, in both directions.
+
+### M2 — Storage model
+
+Done:
+- **A book's identity is its bytes.** BLAKE3 content hashing, streamed so a
+  900 MB scanned PDF does not need 900 MB of memory. The stored value is
+  versioned (`blake3:<hex>`), so a hash from a different build is recognisable
+  rather than silently mismatching.
+- **Directory scanning** in a new `lorebook-scan` crate. Recursive or
+  shallow, format-filtered, incremental: an unchanged file (same size and mtime)
+  is not re-hashed, which is what makes a re-scan cheap.
+- **Duplicate detection by content.** A file whose hash is already in the
+  library adds no book — it becomes another source on the book that exists. The
+  same bytes as `.epub` and `.pdf` is one book with two sources.
+- **Absence is a state, never a deletion.** A file that has vanished is marked
+  `state = 'missing'`; the row and the book survive, because the file may be on
+  an unmounted drive. When the drive comes back the state clears itself.
+- **Never silently adopt.** A scan can only ever write `reference` or `symlink`
+  rows. The only function that can produce `managed` is `adopt_source`, which
+  copies the file into the library and is not reachable from `scan`. Tested, not
+  asserted: a `kind` is just a string in a database, so a scan of a tree
+  including a symlink asserts that no row is managed.
+- **Symlinks are opt-in.** Following is off by default, because a symlink into a
+  home directory turns "scan my books folder" into "hash my entire filesystem".
+
+Verified: 85 cargo tests (M2 adds 25), clippy clean across the workspace, and
+the 11-check real-Calibre interop suite still passes — extending the library has
+not broken Calibre reading it.
+
+Not done in M2: the scan is not yet exposed over IPC to the UI, and the title of
+a scanned book is its filename stem until the M3 curation pipeline parses real
+metadata.
 
 Not done: M1's window-level check — the app starts and the window maps, but
 WebKitGTK does not paint under this Hyprland session, so the UI itself is
