@@ -4,6 +4,7 @@ members = [
     "crates/lorebook-core",
     "crates/lorebook-calibre",
     "crates/lorebook-interop-check",
+    "crates/lorebook-scan",
     # Tauri app shell. Kept in the workspace so it is built and type-checked by
     # the same `cargo test` run as the crates it depends on.
     "src-tauri",
@@ -23,3 +24,4 @@ tracing = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled", "functions", "backup"] }
+blake3 = "1"

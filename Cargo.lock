@@ -1888,6 +1888,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lorebook-scan"
+version = "0.1.0"
+dependencies = [
+ "lorebook-calibre",
+ "lorebook-core",
+ "rusqlite",
+ "serde",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "markup5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
