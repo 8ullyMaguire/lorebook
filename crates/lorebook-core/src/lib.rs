@@ -7,6 +7,8 @@
 //!
 //! Spec: `docs/SPECIFICATION.md` §3 (import model), §4 (schema).
 
+pub mod hash;
+
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
