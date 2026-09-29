@@ -34,6 +34,8 @@ use lorebook_core::{SourceKind, SourceState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+pub mod dedup;
+
 /// Anything that can go wrong during a scan.
 #[derive(Debug, thiserror::Error)]
 pub enum ScanError {

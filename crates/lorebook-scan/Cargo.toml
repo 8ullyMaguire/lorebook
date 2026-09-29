@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 lorebook-core = { path = "../lorebook-core" }
 lorebook-calibre = { path = "../lorebook-calibre" }
+lorebook-parse = { path = "../lorebook-parse" }
 rusqlite.workspace = true
 serde.workspace = true
 tracing.workspace = true
