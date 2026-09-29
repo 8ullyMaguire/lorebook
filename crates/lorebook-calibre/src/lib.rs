@@ -32,6 +32,7 @@ pub mod error;
 pub mod functions;
 
 pub use error::{CalibreError, Result};
+pub use additive::{apply as migrate, is_applied};
 
 /// Open an existing Calibre library, read-write.
 ///
