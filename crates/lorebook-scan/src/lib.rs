@@ -35,6 +35,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 pub mod dedup;
+pub mod inbox;
 
 /// Anything that can go wrong during a scan.
 #[derive(Debug, thiserror::Error)]
