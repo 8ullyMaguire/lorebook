@@ -5,6 +5,7 @@ members = [
     "crates/lorebook-calibre",
     "crates/lorebook-interop-check",
     "crates/lorebook-scan",
+    "crates/lorebook-parse",
     # Tauri app shell. Kept in the workspace so it is built and type-checked by
     # the same `cargo test` run as the crates it depends on.
     "src-tauri",

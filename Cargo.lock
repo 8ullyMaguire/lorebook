@@ -1888,6 +1888,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lorebook-parse"
+version = "0.1.0"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "lorebook-scan"
 version = "0.1.0"
 dependencies = [

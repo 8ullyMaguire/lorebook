@@ -1,6 +1,11 @@
 # Rust
 /target
 **/*.rs.bk
+# A per-crate target dir, created when a test or script runs `cargo` from
+# inside crates/<name> rather than the workspace root. `/target` above is
+# anchored, so it does not cover these -- and the Calibre interop script
+# creates a 184 MB one at crates/lorebook-calibre/target.
+crates/*/target
 
 # Tauri / SvelteKit (not yet scaffolded, but ignore early)
 /src-tauri/target
