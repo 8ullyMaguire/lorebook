@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod dedup;
 pub mod inbox;
+pub mod resolve;
 
 /// Anything that can go wrong during a scan.
 #[derive(Debug, thiserror::Error)]

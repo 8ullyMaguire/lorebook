@@ -132,9 +132,7 @@ impl ContentHasher {
     /// caller's decision is "do I recognise this?", and a hash from a future
     /// build is unrecognised, not fatal. A *malformed* value is equally `None`.
     pub fn digest_of(stored: &str) -> Option<&str> {
-        stored
-            .strip_prefix(CONTENT_HASH_VERSION)?
-            .strip_prefix(':')
+        stored.strip_prefix(CONTENT_HASH_VERSION)?.strip_prefix(':')
     }
 }
 
@@ -173,10 +171,8 @@ mod tests {
             use std::sync::atomic::{AtomicU64, Ordering};
             static COUNTER: AtomicU64 = AtomicU64::new(0);
             let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "lorebook-test-{tag}-{}-{n}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("lorebook-test-{tag}-{}-{n}", std::process::id()));
             std::fs::create_dir_all(&path).expect("create temp dir");
             TempDir(path)
         }
@@ -211,7 +207,8 @@ mod tests {
         let hex = got.strip_prefix("blake3:").unwrap();
         assert_eq!(hex.len(), 64, "BLAKE3 is 32 bytes = 64 hex chars");
         assert!(
-            hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            hex.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "hex must be lowercase: {hex}"
         );
     }
@@ -274,7 +271,10 @@ mod tests {
     #[test]
     fn digest_of_recognises_our_own_values_only() {
         let ours = ContentHasher::hash_bytes(b"x");
-        assert_eq!(ContentHasher::digest_of(&ours), Some(ours.strip_prefix("blake3:").unwrap()));
+        assert_eq!(
+            ContentHasher::digest_of(&ours),
+            Some(ours.strip_prefix("blake3:").unwrap())
+        );
 
         // The cases that must NOT be accepted. A hash from a future build is
         // unrecognised rather than fatal; the caller decides what to do, and

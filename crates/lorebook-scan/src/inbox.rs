@@ -40,6 +40,16 @@ pub fn propose_inbox_item(
 /// while already being "done" — this function prevents that.
 ///
 /// Returns `true` if a row was updated, `false` if `id` did not exist.
+///
+/// # Note on the transaction
+///
+/// This opens its own transaction, because for the common case (the user
+/// answered one item) that is the whole job. A caller that must resolve an
+/// item *as part of a larger atomic change* — the merge in
+/// [`crate::resolve::resolve_pair`] moves a source row, deletes a book and
+/// then resolves the item — must use [`resolve_inbox_item_in`], because a
+/// nested `transaction()` on the same connection is not a savepoint here and
+/// the inner commit would end the outer work early.
 pub fn resolve_inbox_item(
     conn: &mut Connection,
     id: i64,
@@ -48,13 +58,29 @@ pub fn resolve_inbox_item(
     let tx = conn
         .transaction()
         .map_err(|e| ScanError::Sql(e.to_string()))?;
-    let rows = tx.execute(
+    let updated = resolve_inbox_item_in(&tx, id, resolution)?;
+    tx.commit().map_err(|e| ScanError::Sql(e.to_string()))?;
+    Ok(updated)
+}
+
+/// The body of [`resolve_inbox_item`], for a caller that already holds a
+/// transaction.
+///
+/// Takes `&Connection` rather than `&mut Connection` deliberately: a
+/// `Transaction` derefs to one, and asking for `&mut` would force every such
+/// caller to re-borrow mutably for no reason — the single UPDATE is atomic on
+/// its own inside an open transaction.
+pub fn resolve_inbox_item_in(
+    conn: &Connection,
+    id: i64,
+    resolution: &str,
+) -> Result<bool, ScanError> {
+    let rows = conn.execute(
         "UPDATE inbox_items
          SET resolved_at = CURRENT_TIMESTAMP, resolution = ?2
          WHERE id = ?1 AND resolved_at IS NULL",
         params![id, resolution],
     )?;
-    tx.commit()?;
     Ok(rows > 0)
 }
 

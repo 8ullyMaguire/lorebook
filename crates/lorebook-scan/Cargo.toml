@@ -11,7 +11,7 @@ repository.workspace = true
 lorebook-core = { path = "../lorebook-core" }
 lorebook-calibre = { path = "../lorebook-calibre" }
 lorebook-parse = { path = "../lorebook-parse" }
-rusqlite.workspace = true
+rusqlite = { workspace = true, features = ["functions"] }
 serde.workspace = true
 tracing.workspace = true
 thiserror.workspace = true

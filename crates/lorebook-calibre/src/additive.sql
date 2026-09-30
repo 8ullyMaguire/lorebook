@@ -99,6 +99,60 @@ CREATE TABLE IF NOT EXISTS inbox_items (
 CREATE INDEX IF NOT EXISTS inbox_items_unresolved_idx
     ON inbox_items (resolved_at) WHERE resolved_at IS NULL;
 
+-- The second half of a dedup decision, added for spec §3.6 stage 4 and §3.7.
+--
+-- WHY THIS IS A SIBLING TABLE AND NOT A COLUMN ON inbox_items
+--
+-- `inbox_items.book` can name exactly one book. Every uncertain decision the
+-- spec sends to the inbox is a decision about a *pair*: "these two files are
+-- the same work" (probable cross-post), "these two versions of one work
+-- disagree about which is newer" (ambiguous §3.4 case 3). A row naming one
+-- book and no partner cannot record the evidence the user has to judge, and
+-- `inbox_items` is the spec's §4 table with a documented column list — adding
+-- a nullable `other_book` to it would edit a spec'd table for an application
+-- concept the spec never described.
+--
+-- So the pair lives here, keyed to the inbox row that proposes it. The inbox
+-- row stays the unit the user resolves; this table is what makes the
+-- resolution actionable instead of a note.
+--
+-- `other_book` is NOT NULL, and that is the schema's way of saying "a row
+-- here is always about two books". The one-file case the inbox also holds — a
+-- file the pipeline could not name, §3.7's first bullet — needs no partner and
+-- therefore simply has no row in this table. A nullable `other_book` would let
+-- a half-formed pair look like the legitimate one-file case, and the two are
+-- resolved by completely different code paths.
+--
+-- `evidence` is the text the user is shown to judge the pair, and `evidence <>
+-- ''` is enforced here rather than in Rust: an empty string is what a careless
+-- INSERT defaults to, and it is indistinguishable from a real justification in
+-- every query the UI would run. A row that says "possible duplicate" with
+-- nothing to support it is a prompt the user must investigate themselves, which
+-- is the exact thing this feature exists to prevent.
+CREATE TABLE IF NOT EXISTS inbox_pairs (
+    inbox_item INTEGER NOT NULL REFERENCES inbox_items(id) ON DELETE CASCADE,
+    other_book INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    evidence    TEXT    NOT NULL CHECK (length(trim(evidence)) > 0),
+    -- Set once the user acts. NULL means "not yet resolved", which is what the
+    -- partial index below keys on.
+    action      TEXT    CHECK (action IN ('merge','keep_separate','defer')),
+    -- The format that won a merge, when the action was 'merge'. Recorded so a
+    -- later "which file is active" query does not have to re-derive it from an
+    -- mtime that may since have changed.
+    kept_format TEXT    CHECK (kept_format IS NULL OR action = 'merge'),
+    PRIMARY KEY (inbox_item, other_book)
+) STRICT;
+
+-- A pair is between two DIFFERENT books, and the schema cannot enforce that
+-- itself: SQLite prohibits subqueries inside CHECK, and the comparison needs
+-- one (the row's own book lives in inbox_items). `propose_pair` rejects a
+-- self-pair, and the test that proves it is a mutation test in the same sense
+-- as the confidence guard — see crates/lorebook-scan/src/inbox.rs.
+
+-- The unresolved-pair lookup, which is what the inbox view lists.
+CREATE INDEX IF NOT EXISTS inbox_pairs_unresolved_idx
+    ON inbox_pairs (inbox_item) WHERE action IS NULL;
+
 -- Anthology split records (spec §4 split_provenance).
 CREATE TABLE IF NOT EXISTS split_provenance (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -162,6 +162,28 @@ CREATE TABLE annotations_dirtied(id INTEGER PRIMARY KEY,
                              book INTEGER NOT NULL,
                              UNIQUE(book));
 
+-- The annotations table itself. `books_delete_trg` (below) does
+-- `DELETE FROM annotations WHERE book=OLD.id`, so this table is a hard
+-- prerequisite for deleting a book at all: without it every book deletion on a
+-- library created by `create_library` fails with "no such table: main.annotations",
+-- and SQLite reports it as a constraint error on a table the caller never
+-- touched. Taken verbatim from Calibre 9.15, including its UNIQUE constraint,
+-- which is what makes the delete trigger's WHERE clause sufficient.
+CREATE TABLE annotations ( id INTEGER PRIMARY KEY,
+	book INTEGER NOT NULL,
+	format TEXT NOT NULL COLLATE NOCASE,
+	user_type TEXT NOT NULL,
+	user TEXT NOT NULL,
+	timestamp REAL NOT NULL,
+	annot_id TEXT NOT NULL,
+	annot_type TEXT NOT NULL,
+	annot_data TEXT NOT NULL,
+    searchable_text TEXT NOT NULL DEFAULT '',
+    UNIQUE(book, user_type, user, format, annot_type, annot_id)
+);
+
+CREATE INDEX annot_idx ON annotations (book);
+
 CREATE TABLE preferences(id INTEGER PRIMARY KEY,
                                  key TEXT NOT NULL,
                                  val TEXT NOT NULL,
