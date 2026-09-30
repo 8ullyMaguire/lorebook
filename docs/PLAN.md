@@ -428,13 +428,42 @@ Confidence thresholds from the spec, and a test per threshold at the boundary
 (0.499 / 0.500 / 0.501) asserting the bucket, because off-by-one here silently
 merges or splits a user's library.
 
-### M3.3 — Inbox
+### M3.3 — Inbox — **DONE 2026-09-30**
 
 Every uncertain decision lands in `inbox_items` with its evidence. The user
 resolves; the app never guesses destructively.
 
-**Verify:** end-to-end — scan a directory with one duplicate pair, confirm the
-pair lands in the inbox, accept it, confirm one book with two sources.
+Built: `crates/lorebook-scan/src/{inbox,resolve}.rs`, additive tables in
+`lorebook-calibre/src/additive.sql`. Merge is a transaction, so a refusal
+leaves the library untouched. Three answers per pair, and `defer` is a true
+no-op.
+
+**Verify, and what it actually found.** `cargo test --workspace` → **117
+passed, 0 failed**; clippy clean; the 11-check real-Calibre interop suite
+passes. The two tests that were red when this milestone was picked up were
+red *for the wrong reason* — they blamed the merge path for refusing to merge
+a book with no file behind it, and the refusal was correct. Their real defect
+was an assumption about the Calibre fixture, and fixing it exposed a production
+bug underneath: `calibre_schema.sql` omitted the `annotations` table that
+Calibre's own `books_delete_trg` deletes from, so **every book deletion on a
+library we create failed** — and a merge is a book deletion. This milestone
+could never have completed a merge on a real library.
+
+Two new test files, both mutation-proven (three mutations each, all killing the
+suite): `crates/lorebook-calibre/tests/schema_completeness.rs`, and
+`resolve.rs::a_merge_works_against_a_library_calibre_itself_wrote`. They prove
+different things and only the pair is complete — the fixture-based one cannot
+catch our schema omitting a table, because the fixture supplies it, and the
+schema-based one names no fixture.
+
+`PairAction::from_str` is now the `FromStr` trait returning
+`Result<Self, UnknownPairAction>`, so an unknown stored action is reportable
+rather than collapsing into "unresolved".
+
+**Still open in M3:** M3.1 (filename parsers). The end-to-end check written
+above — scan a real directory, watch a pair land in the inbox, accept it — runs
+against `library_with_books`, i.e. a constructed library, not a scanned
+directory on disk. It is the remaining manual gate.
 
 ---
 

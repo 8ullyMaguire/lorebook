@@ -17,7 +17,7 @@ reasoning rather than restating it.
 
 ## Status
 
-**M2 — Storage model.** Built and verified. See below; M1 is still open on one
+**M3.3 — Inbox.** Built and verified. See below. M1 is still open on one
 environment-blocked check.
 
 **M1 — Calibre interop core and app shell.** Built and verified at the library
@@ -43,7 +43,7 @@ Done:
 Verified:
 - Our listing of a Calibre-created library is identical to `calibredb list` —
   same books, authors, tags, series, and the same article-stripped ordering.
-- 85 cargo tests, `svelte-check` clean, clippy clean.
+- 117 cargo tests, `svelte-check` clean, clippy clean.
 - 11 end-to-end checks against a real `calibre` binary, in both directions.
 
 ### M2 — Storage model
@@ -70,7 +70,7 @@ Done:
 - **Symlinks are opt-in.** Following is off by default, because a symlink into a
   home directory turns "scan my books folder" into "hash my entire filesystem".
 
-Verified: 85 cargo tests (M2 adds 25), clippy clean across the workspace, and
+Verified: 85 cargo tests at M2 (M2 adds 25), clippy clean across the workspace, and
 the 11-check real-Calibre interop suite still passes — extending the library has
 not broken Calibre reading it.
 
@@ -80,8 +80,60 @@ metadata.
 
 Not done: M1's window-level check — the app starts and the window maps, but
 WebKitGTK does not paint under this Hyprland session, so the UI itself is
-unverified. Then everything from M2 on: scanning, curation, search, templates,
-plugins. `book_sources` and the additive schema are in place for them.
+unverified. Then M3.1 (filename parsers) and everything from M4 on: search,
+templates, plugins. `book_sources` and the additive schema are in place for
+them.
+
+### M3.2 / M3.3 — Version-aware dedup, and the inbox
+
+Done:
+- **Version-aware dedup.** Same work, different format → one book, many
+  sources. Same work, same format, different files → **proposed, never merged
+  silently**, because silently merging two files is the one irreversible thing
+  a library tool can do to a user's collection.
+- **The inbox.** Every uncertain decision lands in `inbox_items` with the
+  evidence that produced it. The user resolves; the app never guesses
+  destructively. Three answers per pair — merge, keep separate, defer — and
+  deferring leaves the row byte-for-byte as it was.
+- **A merge is all or nothing.** It runs in a transaction: a refusal (both
+  sides hold the same format, or one side has no usable source) leaves the
+  library untouched rather than half-merged.
+- **Refusals are refusals, not failures.** Same format on both sides cannot be
+  merged, because `book_sources` is `UNIQUE(book, format)` and the only way
+  "through" would be to drop a file the user still has. The loser keeps its own
+  path, hash, kind and state when it does move.
+
+Verified: 117 cargo tests, clippy clean across the workspace, and the 11-check
+real-Calibre interop suite still passes.
+
+**The bug that was hiding under two broken tests.** `calibre_schema.sql` never
+created the `annotations` table, while Calibre's own `books_delete_trg` does
+`DELETE FROM annotations WHERE book=OLD.id`. So **every book deletion on a
+library we create failed** — and a merge is exactly a book deletion, meaning
+this milestone could never once complete a merge on a real library. Falsified
+rather than asserted:
+
+```
+WITHOUT annotations (old)    DELETE FAILS  no such table: main.annotations
+WITH annotations (fixed)     DELETE OK     (books left: 1)
+Column-for-column against real Calibre 9.15: True
+```
+
+It survived three stacked reasons, each individually sufficient: the two tests
+that would have caught it were themselves broken and red for an unrelated
+reason; SQLite resolves a trigger body lazily, so creating a library and every
+non-delete path passed; and the real-Calibre fixture *has* the table, so
+anything tested against it was immune. `tests/schema_completeness.rs` now
+compares the tables the cascade trigger names against the tables the schema
+creates, and deletes a book for real on a library we build. Its
+guard-on-the-guard test exists because a check about absence passes just as
+happily when it matches nothing.
+
+**A test can fail for the wrong reason, which is as uninformative as one that
+never failed.** The two red tests blamed the merge path. The merge was right —
+it was correctly refusing to merge a book with no file behind it, and the tests
+were asserting a fiction about the Calibre fixture. Fixing the wrong reason is
+what exposed the real bug underneath.
 
 ## The interop problem, in one paragraph
 
