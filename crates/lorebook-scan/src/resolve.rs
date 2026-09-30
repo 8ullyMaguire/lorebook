@@ -1,10 +1,6 @@
 use crate::inbox;
 use crate::ScanError;
-use lorebook_calibre::{create_library, migrate, functions};
 use rusqlite::{params, Connection, OptionalExtension};
-use rusqlite::functions::{Context, FunctionFlags};
-use std::fs;
-use std::path::Path;
 
 /// What the user decided about a pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,18 +23,34 @@ impl PairAction {
         }
     }
 
-    /// Parse a stored value. `None` for anything else, which is what a row
-    /// written by a future version with a new action would read as — the
-    /// caller treats that as unresolved rather than guessing.
-    pub fn from_str(s: &str) -> Option<Self> {
+}
+
+/// Parse a stored value, as the `FromStr` trait rather than an inherent
+/// `PairAction::from_str`. The inherent version returned `Option<Self>`, which
+/// is a different signature from `std::str::FromStr::from_str` under the same
+/// name — so `"x".parse::<PairAction>()` was a compile error while
+/// `PairAction::from_str("x")` was an inherent call, and the two were easy to
+/// confuse. A row written by a future build with a new action fails to parse
+/// here, which is what the caller wants: the pair is treated as unresolved
+/// rather than guessed at.
+impl std::str::FromStr for PairAction {
+    type Err = UnknownPairAction;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "merge" => Some(PairAction::Merge),
-            "keep_separate" => Some(PairAction::KeepSeparate),
-            "defer" => Some(PairAction::Defer),
-            _ => None,
+            "merge" => Ok(PairAction::Merge),
+            "keep_separate" => Ok(PairAction::KeepSeparate),
+            "defer" => Ok(PairAction::Defer),
+            other => Err(UnknownPairAction(other.to_string())),
         }
     }
 }
+
+/// A stored action this build does not know. A real error type rather than a
+/// bare `()` so the value survives to the caller, which needs it to say *what*
+/// it did not understand — "unresolved" alone would hide a typo in a migration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownPairAction(pub String);
 
 /// Why the pipeline believes two books are one work, as shown to the user.
 ///
@@ -338,8 +350,8 @@ fn merge_books(tx: &Connection, keeper: i64, loser: i64) -> Result<(i64, String)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lorebook_calibre::{create_library, migrate};
-    use std::path::PathBuf;
+    use lorebook_calibre::{create_library, functions, migrate};
+    use rusqlite::functions::{Context, FunctionFlags};
     use tempfile::tempdir;
 
     /// A library with `n` books, each holding one EPUB at a distinct path.
@@ -352,7 +364,7 @@ mod tests {
         // Define the title_sort function used in some triggers.
         conn.create_scalar_function(
             "title_sort",
-            1 as i32,
+            1,
             FunctionFlags::SQLITE_UTF8,
             move |ctx: &Context<'_>| -> Result<String, rusqlite::Error> {
                 let value: String = ctx.get(0)?;
@@ -367,7 +379,15 @@ mod tests {
         (dir, conn)
     }
 
-    /// A library with Calibre's full schema (from the fixture) plus our additive migrations.
+    /// A library built from the **real Calibre fixture**, plus our additive
+    /// migrations.
+    ///
+    /// Every table here comes from Calibre's own file, not from
+    /// `calibre_schema.sql`. That is what makes it an interop fixture and also
+    /// what stops it testing our schema: a table our schema omits is still
+    /// present, because Calibre wrote it. For "does our schema create every
+    /// table it needs", use `schema_completeness.rs`, which builds a library
+    /// from our schema and references no fixture.
     fn library_with_fixture() -> (tempfile::TempDir, Connection) {
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
         let fixture_path = format!("{}/../../fixtures/calibre-9.15-metadata.db", manifest_dir);
@@ -381,7 +401,7 @@ mod tests {
         // Define the title_sort function used in some triggers.
         conn.create_scalar_function(
             "title_sort",
-            1 as i32,
+            1,
             FunctionFlags::SQLITE_UTF8,
             move |ctx: &Context<'_>| -> Result<String, rusqlite::Error> {
                 let value: String = ctx.get(0)?;
@@ -391,30 +411,6 @@ mod tests {
         .expect("failed to create title_sort function");
         migrate(&conn).expect("migrate our additives");
         (dir, conn)
-    }
-
-    /// Helper to get two distinct book IDs from the fixture.
-    fn get_two_books_from_fixture(conn: &mut Connection) -> Result<(i64, i64), ScanError> {
-        let mut stmt = conn
-            .prepare("SELECT id FROM books ORDER BY id LIMIT 2")
-            .map_err(|e| ScanError::Sql(e.to_string()))?;
-        let mut rows = stmt
-            .query_map([], |r| r.get(0))
-            .map_err(|e| ScanError::Sql(e.to_string()))?;
-
-        let book1: i64 = match rows.next() {
-            Some(Ok(v)) => v,
-            Some(Err(e)) => return Err(ScanError::Sql(e.to_string())),
-            None => return Err(ScanError::Sql("need at least two books in fixture".to_string())),
-        };
-
-        let book2: i64 = match rows.next() {
-            Some(Ok(v)) => v,
-            Some(Err(e)) => return Err(ScanError::Sql(e.to_string())),
-            None => return Err(ScanError::Sql("need at least two books in fixture".to_string())),
-        };
-
-        Ok((book1, book2))
     }
 
     /// Insert a book plus one `book_sources` row, as a scan would.
@@ -591,6 +587,116 @@ mod tests {
 
     // --- resolve: merge ---------------------------------------------------
 
+    /// The merge path, against a database **Calibre itself wrote**.
+    ///
+    /// A different guarantee from
+    /// `merging_two_formats_leaves_one_book_with_two_sources`, and worth being
+    /// precise about which, because the obvious claim here is false. Written
+    /// first as "the test that would have caught the missing-`annotations`
+    /// bug" and mutation-proved wrong: dropping `annotations` from
+    /// `calibre_schema.sql` leaves this test **green**, because the fixture is
+    /// a copy of Calibre's own file and carries every table Calibre has. The
+    /// fixture supplies the table; our schema is never asked for it.
+    ///
+    /// So this proves: our trigger works against real Calibre rows, our
+    /// additive migrations apply cleanly on top, and a merge leaves Calibre's
+    /// own book intact. It does **not** prove our schema is complete — that is
+    /// `crates/lorebook-calibre/tests/schema_completeness.rs`. The two are
+    /// complements and only the pair covers both directions.
+    #[test]
+    fn a_merge_works_against_a_library_calibre_itself_wrote() {
+        let (d, mut conn) = library_with_fixture();
+
+        // The fixture's own book, plus a second of ours in a different format.
+        // The keeper is Calibre's book, so the cascade runs on Calibre's rows.
+        let keeper: i64 = conn
+            .query_row("SELECT id FROM books ORDER BY id LIMIT 1", [], |r| r.get(0))
+            .expect("the fixture has a book");
+        // That book has no `book_sources` row — it is Calibre's own `notes`
+        // book, which we have never scanned. Give it one, as a scan would, so
+        // the merge has a real source to keep.
+        conn.execute(
+            "INSERT INTO book_sources (book, format, kind, path, size, mtime_ns, content_hash, state)
+             VALUES (?1, 'EPUB', 'reference', '/books/fixture.EPUB', 1, 1, 'fixture-hash', 'ok')",
+            params![keeper],
+        )
+        .expect("give the fixture book a source, as a scan would");
+
+        let loser = add_book(&conn, 1, "PDF", "ok");
+        let item = propose_pair(
+            &mut conn,
+            keeper,
+            loser,
+            PairReason::ProbableCrossPost,
+            "identical first chapter",
+            0.6,
+        )
+        .expect("propose");
+
+        // Before `annotations` was added to our schema this returned
+        // Err("no such table: main.annotations") from inside the cascade.
+        let outcome = resolve_pair(&mut conn, item, PairAction::Merge)
+            .expect("a merge against a real Calibre library must not fail")
+            .expect("the pair was listed, so it resolves");
+        assert_eq!(
+            outcome,
+            MergeOutcome::Merged {
+                kept_book: keeper,
+                kept_format: "EPUB".to_string()
+            }
+        );
+
+        // Calibre's own book survives, carrying both files.
+        let sources = sources_of(&conn, keeper);
+        assert_eq!(sources.len(), 2, "both files survive the merge");
+        let gone: i64 = conn
+            .query_row("SELECT count(*) FROM books WHERE id = ?1", params![loser], |r| r.get(0))
+            .expect("count the loser");
+        assert_eq!(gone, 0, "the losing book is gone");
+
+        d.close().expect("tempdir close");
+    }
+
+    // --- PairAction: the DB round trip -----------------------------------
+
+    /// Every action survives write-then-read, through the trait.
+    ///
+    /// The round trip is the claim that matters: a row written by one build and
+    /// read by another is the normal case, and a variant missing from the parse
+    /// arm silently becomes "unresolved" — the user's queued decision
+    /// disappears rather than being reported.
+    #[test]
+    fn every_action_round_trips_through_its_stored_form() {
+        use std::str::FromStr;
+        for action in [
+            PairAction::Merge,
+            PairAction::KeepSeparate,
+            PairAction::Defer,
+        ] {
+            let stored = action.as_str();
+            let back = PairAction::from_str(stored)
+                .unwrap_or_else(|e| panic!("{stored:?} did not parse back: {e:?}"));
+            assert_eq!(back, action, "{stored:?} changed meaning across the round trip");
+            assert_eq!(
+                stored.parse::<PairAction>().expect("trait parse"),
+                action,
+                "the FromStr impl and the stored form disagree"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_stored_action_is_an_error_that_keeps_the_value() {
+        use std::str::FromStr;
+        let err = PairAction::from_str("merge_both")
+            .expect_err("a future action must not parse as one of today's");
+        assert_eq!(
+            err.0, "merge_both",
+            "the error must carry the value, so a migration typo is reportable \
+             rather than just 'unresolved'"
+        );
+    }
+
     #[test]
     fn merging_two_formats_leaves_one_book_with_two_sources() {
             // The M3.3 end-to-end claim: a duplicate pair, accepted, becomes one
@@ -609,7 +715,7 @@ mod tests {
             // Add a second book in a different format so the merge is legal:
             // `book_sources` is UNIQUE(book, format), so same-format on both
             // sides is refused by design.
-            let book2 = add_book(&mut conn, 999, "PDF", "ok");
+            let book2 = add_book(&conn, 999, "PDF", "ok");
             let item = propose_pair(
                 &mut conn,
                 book1,
@@ -667,7 +773,7 @@ mod tests {
         let book1: i64 = conn.query_row("SELECT id FROM books LIMIT 1", [], |r| r.get(0))
             .expect("failed to get book1");
         // Add a second book in PDF format.
-        let book2 = add_book(&mut conn, 999, "PDF", "ok");
+        let book2 = add_book(&conn, 999, "PDF", "ok");
         // Propose a pair between book1 and book2.
         let item = propose_pair(
             &mut conn,
